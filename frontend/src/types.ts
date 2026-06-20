@@ -52,8 +52,17 @@ export interface CurvePoint extends ScreenPoint {
 export type StabilityLevel = 'stable' | 'shaky' | 'chaotic';
 
 export interface StabilityMetrics {
+  sampleCount: number;
+  pathLength: number;
+  straightDist: number;
   lengthRatio: number;
+  lengthScore: number;
+  avgTurnAngle: number;
+  maxTurnAngle: number;
   jitterScore: number;
+  avgDeviation: number;
+  maxDeviation: number;
+  normalizedDeviation: number;
   deviationScore: number;
   overallScore: number;
   level: StabilityLevel;

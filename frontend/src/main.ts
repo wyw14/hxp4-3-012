@@ -21,6 +21,10 @@ const stabilityScoreFillEl = document.getElementById('stability-score-fill')!;
 const stableCountEl = document.getElementById('stable-count')!;
 const shakyCountEl = document.getElementById('shaky-count')!;
 const chaoticCountEl = document.getElementById('chaotic-count')!;
+const stabilityMetricsEl = document.getElementById('stability-metrics')!;
+const metricLengthRatioEl = document.getElementById('metric-length-ratio')!;
+const metricTurnAngleEl = document.getElementById('metric-turn-angle')!;
+const metricDeviationEl = document.getElementById('metric-deviation')!;
 const lastLineResultEl = document.getElementById('last-line-result')!;
 
 let lastLineResultTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,6 +60,7 @@ game.setCallbacks({
     stableCountEl.textContent = '0';
     shakyCountEl.textContent = '0';
     chaoticCountEl.textContent = '0';
+    stabilityMetricsEl.style.display = 'none';
     lastLineResultEl.style.display = 'none';
 
     hintTitleEl.textContent = `关卡 ${level.id}: ${level.name}`;
@@ -87,27 +92,36 @@ game.setCallbacks({
     shakyCountEl.textContent = String(summary.shakyCount);
     chaoticCountEl.textContent = String(summary.chaoticCount);
 
-    const totalCount = summary.stableCount + summary.shakyCount + summary.chaoticCount;
-    if (totalCount > 0) {
+    if (summary.totalCount > 0) {
       stabilityLevelEl.textContent = summary.level;
       stabilityLevelEl.style.color = getStabilityColor(summary.level);
       stabilityScoreFillEl.style.width = `${Math.round(summary.avgScore * 100)}%`;
       stabilityScoreFillEl.style.background = getStabilityColor(summary.level);
+
+      stabilityMetricsEl.style.display = 'block';
+      metricLengthRatioEl.textContent = summary.avgLengthRatio.toFixed(2);
+      metricTurnAngleEl.textContent = `${(summary.avgTurnAngle * 180 / Math.PI).toFixed(1)}°`;
+      metricDeviationEl.textContent = `${summary.avgDeviation.toFixed(1)}px`;
     } else {
       stabilityLevelEl.textContent = '—';
       stabilityLevelEl.style.color = '#888';
       stabilityScoreFillEl.style.width = '0%';
+      stabilityMetricsEl.style.display = 'none';
     }
 
-    if (summary.lastLineDesc && summary.lastLineLevel) {
+    if (summary.lastLineDesc && summary.lastLineLevel && summary.lastLineMetrics) {
       if (lastLineResultTimer) {
         clearTimeout(lastLineResultTimer);
         lastLineResultEl.style.animation = 'none';
         void lastLineResultEl.offsetWidth;
       }
 
+      const m = summary.lastLineMetrics;
       const color = getStabilityColor(summary.lastLineDesc);
-      lastLineResultEl.innerHTML = `上一条连线: <span style="color:${color}; font-weight:bold;">${summary.lastLineDesc}</span>`;
+      const turnDeg = (m.avgTurnAngle * 180 / Math.PI).toFixed(1);
+      lastLineResultEl.innerHTML =
+        `上一条: <span style="color:${color}; font-weight:bold;">${summary.lastLineDesc}</span>` +
+        `<br><span style="color:#667;">长度比${m.lengthRatio.toFixed(2)} · 转向${turnDeg}° · 偏离${m.avgDeviation.toFixed(1)}px · 综合${Math.round(m.overallScore * 100)}分</span>`;
       lastLineResultEl.className = 'last-line-result';
       lastLineResultEl.style.display = 'block';
       lastLineResultEl.style.animation = '';

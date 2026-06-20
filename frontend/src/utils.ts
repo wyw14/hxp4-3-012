@@ -162,17 +162,8 @@ export function evaluateStability(
   startPoint: ScreenPoint,
   endPoint: ScreenPoint
 ): StabilityMetrics {
+  const sampleCount = rawPoints.length;
   const straightDist = distance(startPoint, endPoint);
-
-  if (rawPoints.length < 3 || straightDist < 1) {
-    return {
-      lengthRatio: 1,
-      jitterScore: 0,
-      deviationScore: 0,
-      overallScore: 0.85,
-      level: 'stable'
-    };
-  }
 
   const points: ScreenPoint[] = [startPoint, ...rawPoints, endPoint];
 
@@ -180,11 +171,15 @@ export function evaluateStability(
   for (let i = 1; i < points.length; i++) {
     pathLength += distance(points[i - 1], points[i]);
   }
-  const lengthRatio = straightDist > 0 ? pathLength / straightDist : 1;
-  const lengthScore = 1 / Math.pow(Math.max(1, lengthRatio - 1) * 2 + 1, 0.8);
+  if (pathLength < 1e-6 && straightDist < 1e-6) pathLength = 0;
 
-  let angleChanges = 0;
-  let validAngleCount = 0;
+  const lengthRatio = straightDist > 1e-6 ? pathLength / straightDist : 1;
+  const excess = Math.max(0, lengthRatio - 1);
+  const lengthScore = 1 / (1 + excess * 2);
+
+  let totalTurnAngle = 0;
+  let maxTurnAngle = 0;
+  let turnCount = 0;
   for (let i = 2; i < points.length; i++) {
     const v1x = points[i - 1].x - points[i - 2].x;
     const v1y = points[i - 1].y - points[i - 2].y;
@@ -192,15 +187,16 @@ export function evaluateStability(
     const v2y = points[i].y - points[i - 1].y;
     const len1 = Math.sqrt(v1x * v1x + v1y * v1y);
     const len2 = Math.sqrt(v2x * v2x + v2y * v2y);
-    if (len1 > 0.5 && len2 > 0.5) {
+    if (len1 > 1e-6 && len2 > 1e-6) {
       const dot = clamp((v1x * v2x + v1y * v2y) / (len1 * len2), -1, 1);
       const angle = Math.acos(dot);
-      angleChanges += angle;
-      validAngleCount++;
+      totalTurnAngle += angle;
+      if (angle > maxTurnAngle) maxTurnAngle = angle;
+      turnCount++;
     }
   }
-  const avgAngleChange = validAngleCount > 0 ? angleChanges / validAngleCount : 0;
-  const jitterScore = Math.exp(-avgAngleChange * 4);
+  const avgTurnAngle = turnCount > 0 ? totalTurnAngle / turnCount : 0;
+  const jitterScore = Math.exp(-avgTurnAngle * 2.3);
 
   const dx = endPoint.x - startPoint.x;
   const dy = endPoint.y - startPoint.y;
@@ -218,9 +214,9 @@ export function evaluateStability(
     totalDeviation += dev;
     if (dev > maxDeviation) maxDeviation = dev;
   }
-  const avgDeviation = totalDeviation / points.length;
-  const normalizedDeviation = straightDist > 0 ? avgDeviation / straightDist : 0;
-  const deviationScore = Math.exp(-normalizedDeviation * 12);
+  const avgDeviation = points.length > 0 ? totalDeviation / points.length : 0;
+  const normalizedDeviation = straightDist > 1e-6 ? avgDeviation / straightDist : 0;
+  const deviationScore = Math.exp(-normalizedDeviation * 8);
 
   const overallScore = lengthScore * 0.3 + jitterScore * 0.35 + deviationScore * 0.35;
 
@@ -234,8 +230,17 @@ export function evaluateStability(
   }
 
   return {
+    sampleCount,
+    pathLength,
+    straightDist,
     lengthRatio,
+    lengthScore,
+    avgTurnAngle,
+    maxTurnAngle,
     jitterScore,
+    avgDeviation,
+    maxDeviation,
+    normalizedDeviation,
     deviationScore,
     overallScore,
     level
@@ -264,31 +269,147 @@ export function stabilityToColor(level: StabilityLevel): string {
   }
 }
 
+export interface StabilityAggregation {
+  level: StabilityLevel;
+  avgScore: number;
+  stableCount: number;
+  shakyCount: number;
+  chaoticCount: number;
+  avgLengthRatio: number;
+  avgTurnAngle: number;
+  avgDeviation: number;
+  totalCount: number;
+}
+
+export interface StabilitySummary {
+  avgScore: number;
+  level: string;
+  stableCount: number;
+  shakyCount: number;
+  chaoticCount: number;
+  totalCount: number;
+  avgLengthRatio: number;
+  avgTurnAngle: number;
+  avgDeviation: number;
+  lastLineDesc?: string;
+  lastLineLevel?: string;
+  lastLineMetrics?: StabilityMetrics;
+}
+
 export function aggregateStability(
   connections: { stability?: StabilityMetrics; valid?: boolean }[]
-): { level: StabilityLevel; avgScore: number; stableCount: number; shakyCount: number; chaoticCount: number } {
+): StabilityAggregation {
   const withStability = connections.filter(c => c.stability && c.valid);
   if (withStability.length === 0) {
-    return { level: 'stable', avgScore: 0, stableCount: 0, shakyCount: 0, chaoticCount: 0 };
+    return {
+      level: 'stable', avgScore: 0, stableCount: 0, shakyCount: 0, chaoticCount: 0,
+      avgLengthRatio: 0, avgTurnAngle: 0, avgDeviation: 0, totalCount: 0
+    };
   }
 
   let stableCount = 0, shakyCount = 0, chaoticCount = 0;
   let totalScore = 0;
+  let totalLengthRatio = 0;
+  let totalTurnAngle = 0;
+  let totalDeviation = 0;
 
   for (const c of withStability) {
     const s = c.stability!;
     totalScore += s.overallScore;
+    totalLengthRatio += s.lengthRatio;
+    totalTurnAngle += s.avgTurnAngle;
+    totalDeviation += s.avgDeviation;
     if (s.level === 'stable') stableCount++;
     else if (s.level === 'shaky') shakyCount++;
     else chaoticCount++;
   }
 
-  const avgScore = totalScore / withStability.length;
+  const n = withStability.length;
+  const avgScore = totalScore / n;
+  const avgLengthRatio = totalLengthRatio / n;
+  const avgTurnAngle = totalTurnAngle / n;
+  const avgDeviation = totalDeviation / n;
 
   let level: StabilityLevel;
   if (avgScore >= 0.75) level = 'stable';
   else if (avgScore >= 0.45) level = 'shaky';
   else level = 'chaotic';
 
-  return { level, avgScore, stableCount, shakyCount, chaoticCount };
+  return {
+    level, avgScore, stableCount, shakyCount, chaoticCount,
+    avgLengthRatio, avgTurnAngle, avgDeviation, totalCount: n
+  };
+}
+
+export interface StabilityCaseResult {
+  name: string;
+  rawPoints: CurvePoint[];
+  start: ScreenPoint;
+  end: ScreenPoint;
+  metrics: StabilityMetrics;
+  passed: boolean;
+  reason: string;
+}
+
+export function validateStabilityCases(): StabilityCaseResult[] {
+  const cases: Array<{
+    name: string;
+    rawPoints: CurvePoint[];
+    start: ScreenPoint;
+    end: ScreenPoint;
+    expectLevel: StabilityLevel;
+  }> = [
+    {
+      name: '短直线(3采样)',
+      start: { x: 0, y: 0 },
+      end: { x: 100, y: 0 },
+      rawPoints: [
+        { x: 25, y: 1 },
+        { x: 50, y: -1 },
+        { x: 75, y: 1 }
+      ],
+      expectLevel: 'stable'
+    },
+    {
+      name: '短弯线(3采样)',
+      start: { x: 0, y: 0 },
+      end: { x: 100, y: 0 },
+      rawPoints: [
+        { x: 25, y: 15 },
+        { x: 50, y: 20 },
+        { x: 75, y: 15 }
+      ],
+      expectLevel: 'shaky'
+    },
+    {
+      name: '长绕线(多采样)',
+      start: { x: 0, y: 0 },
+      end: { x: 100, y: 0 },
+      rawPoints: [
+        { x: 10, y: 50 }, { x: 20, y: 80 }, { x: 30, y: 40 },
+        { x: 40, y: -30 }, { x: 50, y: 70 }, { x: 60, y: 20 },
+        { x: 70, y: -40 }, { x: 80, y: 60 }, { x: 90, y: 30 }
+      ],
+      expectLevel: 'chaotic'
+    }
+  ];
+
+  const results: StabilityCaseResult[] = [];
+  for (const c of cases) {
+    const metrics = evaluateStability(c.rawPoints, c.start, c.end);
+    const passed = metrics.level === c.expectLevel;
+    const reason = passed
+      ? `符合预期(${stabilityToDescription(c.expectLevel)})`
+      : `预期${stabilityToDescription(c.expectLevel)}但得${stabilityToDescription(metrics.level)}`;
+    results.push({
+      name: c.name,
+      rawPoints: c.rawPoints,
+      start: c.start,
+      end: c.end,
+      metrics,
+      passed,
+      reason
+    });
+  }
+  return results;
 }

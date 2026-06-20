@@ -6,7 +6,8 @@ import type {
   ScreenPoint,
   CurvePoint,
   BackgroundStar,
-  LevelData
+  LevelData,
+  StabilityMetrics
 } from './types';
 import { Renderer } from './renderer';
 import { getLevel, verifyEdge } from './api';
@@ -18,7 +19,9 @@ import {
   clamp,
   evaluateStability,
   stabilityToDescription,
-  aggregateStability
+  aggregateStability,
+  validateStabilityCases,
+  type StabilitySummary
 } from './utils';
 
 const SNAP_DISTANCE = 35;
@@ -37,15 +40,7 @@ export class Game {
   private onLevelChange?: (level: LevelData) => void;
   private onProgressChange?: (current: number, total: number) => void;
   private onComplete?: (desc: string, stabilitySummary: string) => void;
-  private onStabilityChange?: (summary: {
-    avgScore: number;
-    level: string;
-    stableCount: number;
-    shakyCount: number;
-    chaoticCount: number;
-    lastLineDesc?: string;
-    lastLineLevel?: string;
-  }) => void;
+  private onStabilityChange?: (summary: StabilitySummary) => void;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -82,15 +77,7 @@ export class Game {
     onLevelChange?: (level: LevelData) => void;
     onProgressChange?: (current: number, total: number) => void;
     onComplete?: (desc: string, stabilitySummary: string) => void;
-    onStabilityChange?: (summary: {
-      avgScore: number;
-      level: string;
-      stableCount: number;
-      shakyCount: number;
-      chaoticCount: number;
-      lastLineDesc?: string;
-      lastLineLevel?: string;
-    }) => void;
+    onStabilityChange?: (summary: StabilitySummary) => void;
   }): void {
     this.onLevelChange = callbacks.onLevelChange;
     this.onProgressChange = callbacks.onProgressChange;
@@ -197,7 +184,9 @@ export class Game {
     }
   }
 
-  private notifyStabilityChange(lastLineDesc?: string, lastLineLevel?: string): void {
+  private notifyStabilityChange(
+    lastLineMetrics?: StabilityMetrics
+  ): void {
     if (!this.onStabilityChange) return;
     const agg = aggregateStability(this.state.connections);
     this.onStabilityChange({
@@ -206,8 +195,13 @@ export class Game {
       stableCount: agg.stableCount,
       shakyCount: agg.shakyCount,
       chaoticCount: agg.chaoticCount,
-      lastLineDesc,
-      lastLineLevel
+      totalCount: agg.totalCount,
+      avgLengthRatio: agg.avgLengthRatio,
+      avgTurnAngle: agg.avgTurnAngle,
+      avgDeviation: agg.avgDeviation,
+      lastLineDesc: lastLineMetrics ? stabilityToDescription(lastLineMetrics.level) : undefined,
+      lastLineLevel: lastLineMetrics?.level,
+      lastLineMetrics
     });
   }
 
@@ -271,10 +265,7 @@ export class Game {
 
         if (result.valid) {
           this.state.completedEdges.add(edgeKey);
-          this.notifyStabilityChange(
-            stabilityToDescription(stability.level),
-            stability.level
-          );
+          this.notifyStabilityChange(stability);
           this.checkCompletion();
         } else {
           setTimeout(() => {
@@ -350,9 +341,10 @@ export class Game {
         const scorePct = Math.round(agg.avgScore * 100);
         let stabilitySummary = `\n\n📊 星脉稳定度评估：\n`;
         stabilitySummary += `  整体评分：${scorePct}分（${stabilityToDescription(agg.level)}）\n`;
-        stabilitySummary += `  稳定连线：${agg.stableCount}条\n`;
-        stabilitySummary += `  摇晃连线：${agg.shakyCount}条\n`;
-        stabilitySummary += `  紊乱连线：${agg.chaoticCount}条\n`;
+        stabilitySummary += `  稳定/摇晃/紊乱：${agg.stableCount}/${agg.shakyCount}/${agg.chaoticCount} 条\n`;
+        stabilitySummary += `  平均长度比：${agg.avgLengthRatio.toFixed(2)}（路径/直线）\n`;
+        stabilitySummary += `  平均转向角：${(agg.avgTurnAngle * 180 / Math.PI).toFixed(1)}°\n`;
+        stabilitySummary += `  平均偏离距离：${agg.avgDeviation.toFixed(1)}px\n`;
         if (agg.avgScore >= 0.85) {
           stabilitySummary += `  评价：星脉沉稳如恒，技艺精湛！`;
         } else if (agg.avgScore >= 0.7) {
@@ -451,7 +443,31 @@ export class Game {
 
   start(): void {
     this.lastTime = performance.now();
+    this.runStabilityValidation();
     this.loop();
+  }
+
+  private runStabilityValidation(): void {
+    const results = validateStabilityCases();
+    let allPassed = true;
+    console.group('%c[稳定度校验] 典型用例', 'color:#7fffbf;font-weight:bold');
+    for (const r of results) {
+      const m = r.metrics;
+      const tag = r.passed ? '✓' : '✗';
+      const color = r.passed ? '#7fffbf' : '#ff8c5a';
+      console.log(
+        `%c${tag} ${r.name}%c → ${stabilityToDescription(m.level)} | ` +
+        `长度比=${m.lengthRatio.toFixed(2)} 长度分=${m.lengthScore.toFixed(2)} | ` +
+        `转向角=${(m.avgTurnAngle * 180 / Math.PI).toFixed(1)}° 抖动分=${m.jitterScore.toFixed(2)} | ` +
+        `偏离=${m.avgDeviation.toFixed(1)}px 偏离分=${m.deviationScore.toFixed(2)} | ` +
+        `综合=${m.overallScore.toFixed(2)} [${r.reason}]`,
+        `color:${color};font-weight:bold`,
+        'color:inherit'
+      );
+      if (!r.passed) allPassed = false;
+    }
+    console.log(allPassed ? '%c全部用例通过' : '%c存在未通过用例', allPassed ? 'color:#7fffbf' : 'color:#ff8c5a');
+    console.groupEnd();
   }
 
   stop(): void {
