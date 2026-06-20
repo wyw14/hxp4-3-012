@@ -15,7 +15,10 @@ import {
   smoothPath,
   simplifyPath,
   distance,
-  clamp
+  clamp,
+  evaluateStability,
+  stabilityToDescription,
+  aggregateStability
 } from './utils';
 
 const SNAP_DISTANCE = 35;
@@ -33,7 +36,16 @@ export class Game {
 
   private onLevelChange?: (level: LevelData) => void;
   private onProgressChange?: (current: number, total: number) => void;
-  private onComplete?: (desc: string) => void;
+  private onComplete?: (desc: string, stabilitySummary: string) => void;
+  private onStabilityChange?: (summary: {
+    avgScore: number;
+    level: string;
+    stableCount: number;
+    shakyCount: number;
+    chaoticCount: number;
+    lastLineDesc?: string;
+    lastLineLevel?: string;
+  }) => void;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -69,11 +81,21 @@ export class Game {
   setCallbacks(callbacks: {
     onLevelChange?: (level: LevelData) => void;
     onProgressChange?: (current: number, total: number) => void;
-    onComplete?: (desc: string) => void;
+    onComplete?: (desc: string, stabilitySummary: string) => void;
+    onStabilityChange?: (summary: {
+      avgScore: number;
+      level: string;
+      stableCount: number;
+      shakyCount: number;
+      chaoticCount: number;
+      lastLineDesc?: string;
+      lastLineLevel?: string;
+    }) => void;
   }): void {
     this.onLevelChange = callbacks.onLevelChange;
     this.onProgressChange = callbacks.onProgressChange;
     this.onComplete = callbacks.onComplete;
+    this.onStabilityChange = callbacks.onStabilityChange;
   }
 
   private resize(): void {
@@ -175,6 +197,20 @@ export class Game {
     }
   }
 
+  private notifyStabilityChange(lastLineDesc?: string, lastLineLevel?: string): void {
+    if (!this.onStabilityChange) return;
+    const agg = aggregateStability(this.state.connections);
+    this.onStabilityChange({
+      avgScore: agg.avgScore,
+      level: stabilityToDescription(agg.level),
+      stableCount: agg.stableCount,
+      shakyCount: agg.shakyCount,
+      chaoticCount: agg.chaoticCount,
+      lastLineDesc,
+      lastLineLevel
+    });
+  }
+
   private async handleMouseUp(): Promise<void> {
     if (!this.state.drawState.isDrawing || !this.state.levelData) {
       this.state.drawState = this.createEmptyDrawState();
@@ -205,6 +241,7 @@ export class Game {
         const startAnchor = this.state.levelData.anchorPoints.find(a => a.id === startId)!;
         const startPos = this.renderer.getAnchorScreenPos(startAnchor, this.state.rotationOffset);
 
+        const rawDrawPoints: CurvePoint[] = [...ds.points];
         let curvePoints: CurvePoint[] = [{ x: startPos.x, y: startPos.y }, ...ds.points];
         if (endPos) curvePoints.push(endPos);
 
@@ -213,13 +250,20 @@ export class Game {
 
         const result = await verifyEdge(this.state.currentLevel, startId, endId);
 
+        const stability = evaluateStability(
+          rawDrawPoints,
+          startPos,
+          endPos ?? startPos
+        );
+
         const connection: Connection = {
           from: startId,
           to: endId,
           curve: curvePoints,
           valid: result.valid,
           opacity: 0,
-          glowIntensity: 0
+          glowIntensity: 0,
+          stability
         };
 
         this.state.connections.push(connection);
@@ -227,6 +271,10 @@ export class Game {
 
         if (result.valid) {
           this.state.completedEdges.add(edgeKey);
+          this.notifyStabilityChange(
+            stabilityToDescription(stability.level),
+            stability.level
+          );
           this.checkCompletion();
         } else {
           setTimeout(() => {
@@ -298,7 +346,23 @@ export class Game {
         clearTimeout(this.completionTimeoutId);
       }
       this.completionTimeoutId = setTimeout(() => {
-        this.onComplete?.(this.state.levelData!.creatureDescription);
+        const agg = aggregateStability(this.state.connections);
+        const scorePct = Math.round(agg.avgScore * 100);
+        let stabilitySummary = `\n\n📊 星脉稳定度评估：\n`;
+        stabilitySummary += `  整体评分：${scorePct}分（${stabilityToDescription(agg.level)}）\n`;
+        stabilitySummary += `  稳定连线：${agg.stableCount}条\n`;
+        stabilitySummary += `  摇晃连线：${agg.shakyCount}条\n`;
+        stabilitySummary += `  紊乱连线：${agg.chaoticCount}条\n`;
+        if (agg.avgScore >= 0.85) {
+          stabilitySummary += `  评价：星脉沉稳如恒，技艺精湛！`;
+        } else if (agg.avgScore >= 0.7) {
+          stabilitySummary += `  评价：星脉平稳流畅，画得不错！`;
+        } else if (agg.avgScore >= 0.5) {
+          stabilitySummary += `  评价：星脉略有波动，继续加油！`;
+        } else {
+          stabilitySummary += `  评价：星脉起伏较大，深呼吸慢慢画~`;
+        }
+        this.onComplete?.(this.state.levelData!.creatureDescription, stabilitySummary);
         this.completionTimeoutId = null;
       }, 1500);
     }
@@ -329,6 +393,7 @@ export class Game {
         requestAnimationFrame(fadeOut);
       } else {
         this.state.connections.splice(idx, 1);
+        this.notifyStabilityChange();
       }
     };
     fadeOut();
@@ -346,6 +411,7 @@ export class Game {
     this.state.drawState = this.createEmptyDrawState();
     this.state.snapTargetId = null;
     this.onProgressChange?.(0, this.state.levelData?.edges.length ?? 0);
+    this.notifyStabilityChange();
   }
 
   toggleFrequencies(): boolean {
@@ -374,6 +440,7 @@ export class Game {
 
     this.onLevelChange?.(data);
     this.onProgressChange?.(0, data.edges.length);
+    this.notifyStabilityChange();
 
     return true;
   }

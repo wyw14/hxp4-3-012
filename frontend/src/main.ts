@@ -16,12 +16,30 @@ const completeModal = document.getElementById('complete-modal')!;
 const modalTitleEl = document.getElementById('modal-title')!;
 const modalDescEl = document.getElementById('modal-desc')!;
 
+const stabilityLevelEl = document.getElementById('stability-level')!;
+const stabilityScoreFillEl = document.getElementById('stability-score-fill')!;
+const stableCountEl = document.getElementById('stable-count')!;
+const shakyCountEl = document.getElementById('shaky-count')!;
+const chaoticCountEl = document.getElementById('chaotic-count')!;
+const lastLineResultEl = document.getElementById('last-line-result')!;
+
+let lastLineResultTimer: ReturnType<typeof setTimeout> | null = null;
+
 const btnUndo = document.getElementById('btn-undo') as HTMLButtonElement;
 const btnReset = document.getElementById('btn-reset') as HTMLButtonElement;
 const btnHint = document.getElementById('btn-hint') as HTMLButtonElement;
 const btnNext = document.getElementById('btn-next') as HTMLButtonElement;
 
 const MAX_LEVELS = 3;
+
+function getStabilityColor(level: string): string {
+  switch (level) {
+    case '稳定': return '#7fffbf';
+    case '摇晃': return '#ffd700';
+    case '紊乱': return '#ff8c5a';
+    default: return '#a0c4ff';
+  }
+}
 
 game.setCallbacks({
   onLevelChange: (level: LevelData) => {
@@ -31,6 +49,14 @@ game.setCallbacks({
     connectedCountEl.textContent = '0';
     progressFillEl.style.width = '0%';
     completeModal.classList.remove('show');
+
+    stabilityLevelEl.textContent = '—';
+    stabilityLevelEl.style.color = '#888';
+    stabilityScoreFillEl.style.width = '0%';
+    stableCountEl.textContent = '0';
+    shakyCountEl.textContent = '0';
+    chaoticCountEl.textContent = '0';
+    lastLineResultEl.style.display = 'none';
 
     hintTitleEl.textContent = `关卡 ${level.id}: ${level.name}`;
     hintTextEl.textContent = '寻找闪烁频率成倍数关系的恒星，从一颗星拖动到另一颗星连接它们';
@@ -56,12 +82,48 @@ game.setCallbacks({
       }
     }
   },
-  onComplete: (desc: string) => {
+  onStabilityChange: (summary) => {
+    stableCountEl.textContent = String(summary.stableCount);
+    shakyCountEl.textContent = String(summary.shakyCount);
+    chaoticCountEl.textContent = String(summary.chaoticCount);
+
+    const totalCount = summary.stableCount + summary.shakyCount + summary.chaoticCount;
+    if (totalCount > 0) {
+      stabilityLevelEl.textContent = summary.level;
+      stabilityLevelEl.style.color = getStabilityColor(summary.level);
+      stabilityScoreFillEl.style.width = `${Math.round(summary.avgScore * 100)}%`;
+      stabilityScoreFillEl.style.background = getStabilityColor(summary.level);
+    } else {
+      stabilityLevelEl.textContent = '—';
+      stabilityLevelEl.style.color = '#888';
+      stabilityScoreFillEl.style.width = '0%';
+    }
+
+    if (summary.lastLineDesc && summary.lastLineLevel) {
+      if (lastLineResultTimer) {
+        clearTimeout(lastLineResultTimer);
+        lastLineResultEl.style.animation = 'none';
+        void lastLineResultEl.offsetWidth;
+      }
+
+      const color = getStabilityColor(summary.lastLineDesc);
+      lastLineResultEl.innerHTML = `上一条连线: <span style="color:${color}; font-weight:bold;">${summary.lastLineDesc}</span>`;
+      lastLineResultEl.className = 'last-line-result';
+      lastLineResultEl.style.display = 'block';
+      lastLineResultEl.style.animation = '';
+
+      lastLineResultTimer = setTimeout(() => {
+        lastLineResultEl.style.display = 'none';
+        lastLineResultTimer = null;
+      }, 2500);
+    }
+  },
+  onComplete: (desc: string, stabilitySummary: string) => {
     hintTitleEl.textContent = '✨ 星座完成 ✨';
     hintTextEl.textContent = '星界神话生物已显现！仔细欣赏它的光辉吧';
 
     modalTitleEl.textContent = `✨ ${creatureNameEl.textContent} 降临 ✨`;
-    modalDescEl.textContent = desc;
+    modalDescEl.textContent = desc + stabilitySummary;
     completeModal.classList.add('show');
 
     if (game.getCurrentLevel() >= MAX_LEVELS) {

@@ -5,7 +5,7 @@ import type {
   ScreenPoint,
   CurvePoint
 } from './types';
-import { rotatePoint } from './utils';
+import { rotatePoint, stabilityToColor } from './utils';
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -241,14 +241,54 @@ export class Renderer {
       const opacity = conn.opacity * pulse;
 
       if (conn.valid) {
-        this.drawCurve(conn.curve, '#ffd700', 3, opacity, true);
+        const baseColor = '#ffd700';
+        let lineColor = baseColor;
+        let lineWidth = 3;
+        let glowMultiplier = 1;
 
-        for (const pt of conn.curve) {
-          if (Math.random() < 0.02) {
-            const r = 2 + Math.random() * 3;
+        if (conn.stability) {
+          const stabColor = stabilityToColor(conn.stability.level);
+          lineColor = stabColor;
+          lineWidth = 3;
+
+          if (conn.stability.level === 'stable') {
+            glowMultiplier = 1.2;
+          } else if (conn.stability.level === 'shaky') {
+            glowMultiplier = 0.9;
+          } else {
+            glowMultiplier = 0.7;
+            const wobble = Math.sin(time * 8) * 0.3 + 1;
+            lineWidth = 2.5 * wobble;
+          }
+        }
+
+        this.drawCurve(conn.curve, lineColor, lineWidth, opacity, true);
+
+        if (conn.stability?.level !== 'chaotic') {
+          const particleRate = conn.stability?.level === 'stable' ? 0.02 : 0.01;
+          for (const pt of conn.curve) {
+            if (Math.random() < particleRate) {
+              const r = 2 + Math.random() * 3;
+              this.ctx.beginPath();
+              this.ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+              this.ctx.fillStyle = `rgba(255, 230, 150, ${opacity * 0.6 * glowMultiplier})`;
+              this.ctx.fill();
+            }
+          }
+        }
+
+        if (conn.stability?.level === 'stable' && conn.curve.length > 10) {
+          const stride = Math.max(1, Math.floor(conn.curve.length / 4));
+          for (let i = 0; i < conn.curve.length; i += stride) {
+            const pt = conn.curve[i];
+            const shimmer = Math.sin(time * 3 + i * 0.5) * 0.4 + 0.6;
+            const glowR = 8 * shimmer;
+            const glow = this.ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, glowR);
+            glow.addColorStop(0, `rgba(127, 255, 191, ${opacity * 0.35 * shimmer})`);
+            glow.addColorStop(1, 'rgba(127, 255, 191, 0)');
             this.ctx.beginPath();
-            this.ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-            this.ctx.fillStyle = `rgba(255, 230, 150, ${opacity * 0.6})`;
+            this.ctx.arc(pt.x, pt.y, glowR, 0, Math.PI * 2);
+            this.ctx.fillStyle = glow;
             this.ctx.fill();
           }
         }

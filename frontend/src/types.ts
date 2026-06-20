@@ -49,6 +49,16 @@ export interface CurvePoint extends ScreenPoint {
   t?: number;
 }
 
+export type StabilityLevel = 'stable' | 'shaky' | 'chaotic';
+
+export interface StabilityMetrics {
+  lengthRatio: number;
+  jitterScore: number;
+  deviationScore: number;
+  overallScore: number;
+  level: StabilityLevel;
+}
+
 export interface Connection {
   from: string;
   to: string;
@@ -56,6 +66,7 @@ export interface Connection {
   valid: boolean;
   opacity: number;
   glowIntensity: number;
+  stability?: StabilityMetrics;
 }
 
 export interface DrawState {
